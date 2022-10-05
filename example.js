@@ -6,6 +6,10 @@ const REGION_SHARD_MAPPING = {
     'frankfurt': 'eu-central-1',
     'london': 'eu-west-2'
 };
+const TRANSCRIPT_LANGUAGES = [
+    'en-US',
+    'es-ES'
+];
 const INVALID_CLASS = 'is-invalid';
 const HIDE_CLASS = 'd-none';
 
@@ -157,6 +161,9 @@ const onRemoteTrack = track => {
 
 const onConferenceJoined = () => {
     console.log('conference joined!');
+    const selectedTranscript = document.getElementById('transcriptInput').value;
+    room.setLocalParticipantProperty('requestingTranscription', true);
+    room.setLocalParticipantProperty('transcription_language', selectedTranscript);
 };
 
 const onConferenceLeft = () => {
@@ -208,6 +215,8 @@ const onConnectionSuccess = () => {
     room.on(
         JitsiMeetJS.events.conference.USER_LEFT,
         onUserLeft);
+
+    room.on(JitsiMeetJS.events.conference.ENDPOINT_MESSAGE_RECEIVED, (...args) => { console.log('RECEIVED ENDPOINT MESSAGE', args) });
 
     // Join
     room.join();
@@ -362,6 +371,16 @@ const addRegionsOptions = () => {
     });
 };
 
+const addTranscriptOptions = () => {
+    const transcriptInput = document.getElementById('transcriptInput');
+    TRANSCRIPT_LANGUAGES.forEach(transcript => {
+        const optionElem = document.createElement('option');
+        optionElem.value = transcript;
+        optionElem.text = transcript;
+        transcriptInput.appendChild(optionElem);
+    });
+};
+
 // [testing purposes] Notify that a connection reload is necessary to apply a different ljm script.
 const signalReload = () => {
     const RELOAD_BUTTON = 'reloadButton';
@@ -423,6 +442,7 @@ window.addEventListener('unload', disconnect);
 
 document.addEventListener('DOMContentLoaded', () => {
     addRegionsOptions();
+    addTranscriptOptions();
     const form = document.getElementById('form');
     const tenantInput = document.getElementById('tenantInput');
     const roomInput = document.getElementById('roomInput');

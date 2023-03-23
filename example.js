@@ -92,7 +92,11 @@ let room = null;
 
 let localTracks = [];
 const remoteTracks = {};
-let participantIds = new Set();
+let receiverConstraints = {
+    constraints: {},
+    defaultConstraints: { 'maxHeight': '2160' },
+    lastN: -1
+};
 
 const cleanupDOM = id => {
     const element = document.getElementById(id);
@@ -170,22 +174,17 @@ const onConferenceLeft = () => {
     console.log('conference left!');
 };
 
+const onDataChanelOpened = () => {
+    room.setReceiverConstraints(receiverConstraints);
+};
+
 const onUserJoined = id => {
     console.log('user joined!');
-
-    participantIds.add(id);
-
-    // Select all participants so we can receive video
-    room.selectParticipants(Array.from(participantIds));
 };
 
 
 const onUserLeft = id => {
     console.log('user left!');
-
-    participantIds.delete(id);
-
-    room.selectParticipants(Array.from(participantIds));
 };
 
 
@@ -209,6 +208,9 @@ const onConnectionSuccess = () => {
     room.on(
         JitsiMeetJS.events.conference.CONFERENCE_LEFT,
         onConferenceLeft);
+    room.on(
+        JitsiMeetJS.events.conference.DATA_CHANNEL_OPENED,
+        onDataChanelOpened);
     room.on(
         JitsiMeetJS.events.conference.USER_JOINED,
         onUserJoined);

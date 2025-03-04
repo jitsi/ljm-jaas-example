@@ -37,7 +37,7 @@ function buildOptions(tenant, room, release) {
         },
         serviceUrl: `wss://${subdomain}8x8.vc/${tenant}/xmpp-websocket?room=${room}${releaseVersion}`,
         websocketKeepAliveUrl: `https://${subdomain}8x8.vc/${tenant}/_unlock?room=${room}`,
-
+        hiddenDomain: `recorder.${subdomain}8x8.vc`,
         // Video quality / constraints
         constraints: {
             video: {
@@ -165,9 +165,6 @@ const onRemoteTrack = track => {
 
 const onConferenceJoined = () => {
     console.log('conference joined!');
-    const selectedTranscript = document.getElementById('transcriptInput').value;
-    room.setLocalParticipantProperty('requestingTranscription', true);
-    room.setLocalParticipantProperty('transcription_language', selectedTranscript);
 };
 
 const onConferenceLeft = () => {
@@ -197,6 +194,27 @@ const onConnectionSuccess = () => {
     }
 
     // Setup event listeners
+    room.on(
+        JitsiMeetJS.events.conference.TRANSCRIPTION_STATUS_CHANGED,
+        status => {
+            console.log(`transcript ${status}`);
+        });
+
+    room.on(
+        JitsiMeetJS.events.conference.USER_ROLE_CHANGED,
+        (id, role) => {
+            if (id === room.myUserId()
+                && role === 'moderator'
+                && room.getTranscriptionStatus() !== 'ON'
+            ) {
+                console.log('enable transcript');
+                const selectedTranscript = document.getElementById('transcriptInput').value;
+                room.dial('jitsi_meet_transcribe');
+                room.setLocalParticipantProperty('requestingTranscription', true);
+                room.setLocalParticipantProperty('transcription_language', selectedTranscript);
+            }
+        });
+
     room.on(
         JitsiMeetJS.events.conference.TRACK_ADDED,
         track => {

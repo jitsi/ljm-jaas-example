@@ -81,6 +81,12 @@ function buildOptions(tenant, room, release) {
             'modules/statistics/CallStats.js': 'info',
             'modules/xmpp/strophe.util.js': 'log'
         },
+        analytics: {
+            rtcstatsEnabled: true ,
+            rtcstatsStoreLogs: true ,
+            rtcstatsEndpoint: `wss://rtcstats-server-${useStage ? 'pilot' : '8x8'}.jitsi.net/`,
+            rtcstatsSendSdp: true,
+        },
 
         // End marker, disregard
         __end: true

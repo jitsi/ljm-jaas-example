@@ -60,13 +60,6 @@ function buildOptions(tenant, room, release) {
             enabled: true
         },
 
-        // Enable Callstats (note, none of this is secret, despite its name)
-        callStatsID: '706724306',
-        callStatsSecret: 'f+TKWryzPOyX:dNR8PMw42WJwM3YM1XkJUjPOLY0M40wz+0D4mZud8mQ=',
-        confID: `https://${stage}8x8.vc/${tenant}/${room}`,
-        siteID: tenant,
-        applicationName: 'My Sample JaaS App',
-
         // Misc
         deploymentInfo: hasRegion ? { userRegion: REGION_SHARD_MAPPING[selectedRegion] } : {},
 

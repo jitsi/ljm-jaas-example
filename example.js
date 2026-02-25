@@ -25,7 +25,7 @@ function buildOptions(tenant, room, release) {
     const region = hasRegion ? `${selectedRegion}.` : '';
     const stage = useStage ? 'stage.' : ''
     const subdomain = useStage ? stage : region;
-    const releaseVersion = release ? `?release=release-${release}` : '';
+    const releaseVersion = release ? `&release=release-${release}` : '';
 
     return {
 

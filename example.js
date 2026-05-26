@@ -19,6 +19,21 @@ let token;
 let releaseVersion;
 let useStage;
 
+// Visitor state. Mirrors jitsi-meet's redirect flow: when the server redirects
+// us to a visitor node (vnode), we reconnect with adjusted XMPP options;
+// when we are promoted back to the main room (vnode === undefined), we restore
+// the original options and append a customusername param.
+let preferVisitor = false;
+let visitorVnode = null;
+let visitorFocusJid = null;
+let visitorPromotedUsername = null;
+
+function appendURLParam(url, name, value) {
+    const sep = url.indexOf('?') === -1 ? '?' : '&';
+
+    return `${url}${sep}${name}=${encodeURIComponent(value)}`;
+}
+
 function buildOptions(tenant, room, release) {
     const selectedRegion = document.getElementById('regionInput').value;
     const hasRegion = selectedRegion !== 'default';
@@ -27,17 +42,53 @@ function buildOptions(tenant, room, release) {
     const subdomain = useStage ? stage : region;
     const releaseVersion = release ? `&release=release-${release}` : '';
 
+    const baseDomain = `${stage}8x8.vc`;
+    let hostsDomain = baseDomain;
+    let hostsMuc = `conference.${tenant}.${baseDomain}`;
+    let serviceUrl = `wss://${subdomain}8x8.vc/${tenant}/xmpp-websocket?room=${room}${releaseVersion}`;
+    let websocketKeepAliveUrl = `https://${subdomain}8x8.vc/${tenant}/_unlock?room=${room}`;
+
+    // Visitor redirect: jitsi-meet's getVisitorOptions() switches the domain
+    // to `${vnode}.meet.jitsi`, replaces the same in the muc, appends `vnode`
+    // to the websocket URL, and sets disableFocus / disableLocalStatsBroadcast.
+    const visitorOverrides = {};
+
+    if (visitorVnode) {
+        const visitorDomain = `${visitorVnode}.meet.jitsi`;
+
+        hostsMuc = hostsMuc.replace(hostsDomain, visitorDomain);
+        hostsDomain = visitorDomain;
+        serviceUrl = appendURLParam(serviceUrl, 'vnode', visitorVnode);
+
+        visitorOverrides.focusUserJid = visitorFocusJid;
+        // Visitors do not send the initial conference-request to focus.
+        visitorOverrides.disableFocus = true;
+        visitorOverrides.disableLocalStatsBroadcast = true;
+    } else if (visitorPromotedUsername) {
+        // Promotion back to main room: append customusername so the new
+        // connection re-uses the resource the visitor was already known by.
+        // Keep disableFocus=true (jitsi-meet getVisitorOptions deliberately
+        // does not reset it): if focus is enabled, jicofo would treat this
+        // as a fresh conference-request and redirect us back to a vnode on
+        // every promotion. With disableFocus=true we go straight to the main
+        // MUC; if main is full, jicofo redirects via the MUC instead.
+        serviceUrl = appendURLParam(serviceUrl, 'customusername', visitorPromotedUsername);
+        visitorOverrides.focusUserJid = visitorFocusJid;
+        visitorOverrides.disableFocus = true;
+    }
+
     return {
 
         // Connection
         hosts: {
-            domain: `${stage}8x8.vc`,
-            muc: `conference.${tenant}.${stage}8x8.vc`,
+            domain: hostsDomain,
+            muc: hostsMuc,
             focus: `focus.${stage}8x8.vc`
         },
-        serviceUrl: `wss://${subdomain}8x8.vc/${tenant}/xmpp-websocket?room=${room}${releaseVersion}`,
-        websocketKeepAliveUrl: `https://${subdomain}8x8.vc/${tenant}/_unlock?room=${room}`,
+        serviceUrl,
+        websocketKeepAliveUrl,
         hiddenDomain: `recorder.${subdomain}8x8.vc`,
+        ...visitorOverrides,
         // Video quality / constraints
         constraints: {
             video: {
@@ -80,6 +131,10 @@ function buildOptions(tenant, room, release) {
             rtcstatsEndpoint: `wss://rtcstats-server-${useStage ? 'pilot' : '8x8'}.jitsi.net/`,
             rtcstatsSendSdp: true,
         },
+
+        // Visitor support: when set, the server may redirect this connection
+        // to a visitor node (vnode) via CONNECTION_REDIRECTED.
+        preferVisitor,
 
         // End marker, disregard
         __end: true
@@ -164,6 +219,13 @@ const onRemoteTrack = track => {
 
 const onConferenceJoined = () => {
     console.log('conference joined!');
+    // Mirrors jitsi-meet's middleware.any.ts: once we are in the main room,
+    // clear the promotion-back state so the next reconnect (e.g. a demote)
+    // does not stay on the disableFocus=true branch and silently rejoin main.
+    if (!visitorVnode) {
+        visitorPromotedUsername = null;
+        visitorFocusJid = null;
+    }
 };
 
 const onConferenceLeft = () => {
@@ -237,6 +299,51 @@ const onConnectionSuccess = () => {
 
     room.on(JitsiMeetJS.events.conference.ENDPOINT_MESSAGE_RECEIVED, (...args) => { console.log('RECEIVED ENDPOINT MESSAGE', args) });
 
+    // Visitor support. Mirrors react/features/visitors/middleware.ts in jitsi-meet.
+    room.on(
+        JitsiMeetJS.events.conference.VISITORS_SUPPORTED_CHANGED,
+        supported => console.log(`visitors supported: ${supported}`));
+
+    room.on(
+        JitsiMeetJS.events.conference.VISITORS_MESSAGE,
+        msg => {
+            console.log('visitors message', msg);
+
+            if (msg.action === 'promotion-request') {
+                // We are a moderator and a visitor is asking to be promoted.
+                // jitsi-meet shows a notification and waits for an
+                // approve/deny action; here we expose a global helper.
+                if (msg.on) {
+                    console.log(
+                        `visitor ${msg.nick || msg.from} requested promotion. `
+                        + `Call approveVisitor('${msg.from}') or denyVisitor('${msg.from}') to respond.`);
+                }
+            } else if (msg.action === 'demote-request') {
+                // We have been asked to become a visitor. Reconnect with
+                // preferVisitor = true so the server redirects us to a vnode.
+                // Clear any leftover promotion-back state, otherwise
+                // buildOptions takes the customusername + disableFocus branch
+                // and we silently rejoin main instead of getting redirected.
+                const localId = room.myUserId();
+                if (localId === msg.id) {
+                    console.log(`demoted to visitor by ${msg.actor}`);
+                    preferVisitor = true;
+                    visitorVnode = null;
+                    visitorFocusJid = null;
+                    visitorPromotedUsername = null;
+                    reload();
+                }
+            }
+        });
+
+    room.on(
+        JitsiMeetJS.events.conference.VISITORS_REJECTION,
+        () => {
+            console.log('promotion request rejected');
+            // Lower hand to clear the pending state.
+            room.setLocalParticipantProperty('raisedHand', 0);
+        });
+
     // Join
     room.join();
     room.setSenderVideoConstraint(720);  // Send at most 720p
@@ -247,6 +354,58 @@ const onConnectionSuccess = () => {
 const onConnectionFailed = () => {
     console.error('connection failed!');
 };
+
+// Server is asking us to reconnect to a different shard. When vnode is set we
+// are being moved to a visitor node; when it is undefined we are being
+// promoted back to the main room (and username carries the resource we
+// should rejoin under, mirroring jitsi-meet's getVisitorOptions()).
+const onConnectionRedirected = async (vnode, focusJid, username) => {
+    console.log(`connection redirected: vnode=${vnode} focusJid=${focusJid} username=${username}`);
+
+    visitorVnode = vnode;
+    visitorFocusJid = focusJid;
+    visitorPromotedUsername = vnode ? null : username;
+    // Clear preferVisitor: the redirect itself is the server's response to it.
+    preferVisitor = false;
+
+    removeRemoteTracks();
+    await disconnect();
+    await connect();
+};
+
+// Visitors request promotion by raising their hand; lib-jitsi-meet translates
+// the raisedHand property into a promotion-request to the main room.
+const requestPromotion = () => {
+    if (!room) {
+        return;
+    }
+    room.setLocalParticipantProperty('raisedHand', Date.now());
+    console.log('promotion request sent (raised hand)');
+};
+
+// Moderator helpers. The promotion-response endpoint message format matches
+// react/features/visitors/actions.ts in jitsi-meet.
+const approveVisitor = id => {
+    room && room.sendMessage({
+        type: 'visitors',
+        action: 'promotion-response',
+        approved: true,
+        id
+    });
+};
+
+const denyVisitor = id => {
+    room && room.sendMessage({
+        type: 'visitors',
+        action: 'promotion-response',
+        approved: false,
+        id
+    });
+};
+
+window.requestPromotion = requestPromotion;
+window.approveVisitor = approveVisitor;
+window.denyVisitor = denyVisitor;
 
 const isTenantValid = () => {
     if (!tenantInput.value.startsWith('vpaas-magic-cookie-')) {
@@ -304,8 +463,12 @@ const connect = async () => {
         }
     }
 
-    const tracks = await JitsiMeetJS.createLocalTracks({ devices: ['audio', 'video'] });
-    onLocalTracks(tracks);
+    // Visitors join without any sources. jitsi-meet calls destroyLocalTracks()
+    // on the redirect and only sets up startup media after promotion back.
+    if (!preferVisitor && !visitorVnode) {
+        const tracks = await JitsiMeetJS.createLocalTracks({ devices: ['audio', 'video'] });
+        onLocalTracks(tracks);
+    }
 
     connection = new JitsiMeetJS.JitsiConnection(null, token, options);
     console.log(`using LJM version ${JitsiMeetJS.version}!`);
@@ -319,6 +482,9 @@ const connect = async () => {
     connection.addEventListener(
         JitsiMeetJS.events.connection.CONNECTION_DISCONNECTED,
         disconnect);
+    connection.addEventListener(
+        JitsiMeetJS.events.connection.CONNECTION_REDIRECTED,
+        onConnectionRedirected);
 
     return connection.connect();
 };
@@ -350,10 +516,14 @@ const disconnect = async () => {
     connection.removeEventListener(
         JitsiMeetJS.events.connection.CONNECTION_DISCONNECTED,
         disconnect);
+    connection.removeEventListener(
+        JitsiMeetJS.events.connection.CONNECTION_REDIRECTED,
+        onConnectionRedirected);
 
     for (let i = 0; i < localTracks.length; i++) {
         localTracks[i].dispose();
     }
+    localTracks = [];
 
     return await connection.disconnect();
 };
@@ -469,8 +639,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const useStageInput = document.getElementById('useStageInput');
     const goButton = document.getElementById('goButton');
     const hangupButton = document.getElementById('hangupButton');
+    const promoteButton = document.getElementById('promoteButton');
 
     form.addEventListener('submit', event => event.preventDefault());
+    if (promoteButton) {
+        promoteButton.addEventListener('click', requestPromotion);
+    }
     tenantInput.addEventListener('blur', isTenantValid);
     roomInput.addEventListener('blur', isRoomValid);
     releaseInput.addEventListener('blur', handleReleaseUpdate);

@@ -47,6 +47,9 @@ function buildOptions(tenant, room, release) {
     let hostsMuc = `conference.${tenant}.${baseDomain}`;
     let serviceUrl = `wss://${subdomain}8x8.vc/${tenant}/xmpp-websocket?room=${room}${releaseVersion}`;
     let websocketKeepAliveUrl = `https://${subdomain}8x8.vc/${tenant}/_unlock?room=${room}`;
+    // Matches jitsi-meet's config.js on 8x8.vc / stage.8x8.vc. lib-jitsi-meet
+    // posts the conference-request here instead of relying on focus IQs.
+    let conferenceRequestUrl = `https://${subdomain}8x8.vc/${tenant}/conference-request/v1?room=${room}`;
 
     // Visitor redirect: jitsi-meet's getVisitorOptions() switches the domain
     // to `${vnode}.meet.jitsi`, replaces the same in the muc, appends `vnode`
@@ -87,6 +90,7 @@ function buildOptions(tenant, room, release) {
         },
         serviceUrl,
         websocketKeepAliveUrl,
+        conferenceRequestUrl,
         hiddenDomain: `recorder.${subdomain}8x8.vc`,
         ...visitorOverrides,
         // Video quality / constraints
